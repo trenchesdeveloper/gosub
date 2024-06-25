@@ -40,6 +40,25 @@ func main() {
 	// set up mail
 
 	// listen for web connections
+	app.serve()
+}
+
+func (app *Config) serve() {
+	// start http server
+	srv := &http.Server{
+		Addr:    ":" + webPort,
+		Handler: app.Routes(),
+	}
+
+	app.InfoLog.Println("starting the server on port", webPort)
+
+	err := srv.ListenAndServe()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+
 }
 
 func initDB() db.Session {
