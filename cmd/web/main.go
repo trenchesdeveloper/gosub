@@ -4,17 +4,20 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/alexedwards/scs/redisstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/gomodule/redigo/redis"
+	"github.com/trenchesdeveloper/gosub/data"
 	"github.com/upper/db/v4"
 	"github.com/upper/db/v4/adapter/postgresql"
 )
 
-const webPort = "80"
+const webPort = "5000"
 
 func main() {
 	// connect to the db
@@ -35,9 +38,13 @@ func main() {
 		InfoLog:  log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime),
 		ErrorLog: log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile),
 		Wait:     wg,
+		Models:   data.New(db),
 	}
 
 	// set up mail
+
+	// listen for shutdown
+	go app.listenForShutdown()
 
 	// listen for web connections
 	app.serve()
@@ -57,7 +64,6 @@ func (app *Config) serve() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 
 }
 
@@ -139,4 +145,21 @@ func initRedis() *redis.Pool {
 
 	return redisPool
 
+}
+
+func (app *Config) listenForShutdown() {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	app.Shitdown()
+
+	os.Exit(0)
+}
+
+func (app *Config) Shitdown() {
+	app.InfoLog.Println("shutting down the server")
+	app.Wait.Wait()
+
+	app.InfoLog.Println("graceful shutdown completed")
 }
