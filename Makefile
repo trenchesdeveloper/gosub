@@ -1,6 +1,6 @@
 BINARY_NAME=myapp
 DSN="host=localhost port=5435 user=postgres password=password dbname=concurrency sslmode=disable timezone=UTC connect_timeout=5"
-REDIS="127.0.0.1:6379"
+REDIS=127.0.0.1:6379
 
 ## build: Build binary
 build:

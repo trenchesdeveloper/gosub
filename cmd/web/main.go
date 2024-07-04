@@ -1,6 +1,9 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/gob"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,38 +15,43 @@ import (
 	"github.com/alexedwards/scs/redisstore"
 	"github.com/alexedwards/scs/v2"
 	"github.com/gomodule/redigo/redis"
+	_ "github.com/jackc/pgconn"
+	_ "github.com/jackc/pgx/v4"
+	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/trenchesdeveloper/gosub/data"
-	"github.com/upper/db/v4"
-	"github.com/upper/db/v4/adapter/postgresql"
 )
 
 const webPort = "5000"
 
 func main() {
-	// connect to the db
+	// connect to the database
 	db := initDB()
 
 	// create sessions
 	session := initSession()
 
+	// create loggers
+	infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
+	errorLog := log.New(os.Stdout, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile)
+
 	// create channels
 
-	// create wait groups
-	wg := &sync.WaitGroup{}
+	// create waitgroup
+	wg := sync.WaitGroup{}
 
-	// setup the application config
-	app := &Config{
+	// set up the application config
+	app := Config{
 		Session:  session,
 		DB:       db,
-		InfoLog:  log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime),
-		ErrorLog: log.New(os.Stderr, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile),
-		Wait:     wg,
+		InfoLog:  infoLog,
+		ErrorLog: errorLog,
+		Wait:     &wg,
 		Models:   data.New(db),
 	}
 
 	// set up mail
 
-	// listen for shutdown
+	// listen for signals
 	go app.listenForShutdown()
 
 	// listen for web connections
@@ -53,78 +61,74 @@ func main() {
 func (app *Config) serve() {
 	// start http server
 	srv := &http.Server{
-		Addr:    ":" + webPort,
+		Addr:    fmt.Sprintf(":%s", webPort),
 		Handler: app.Routes(),
 	}
 
-	app.InfoLog.Println("starting the server on port", webPort)
-
+	app.InfoLog.Println("Starting web server...")
 	err := srv.ListenAndServe()
-
 	if err != nil {
-		log.Fatal(err)
+		log.Panic(err)
 	}
-
 }
 
-func initDB() db.Session {
+// initDB connects to Postgres and returns a pool of connections
+func initDB() *sql.DB {
 	conn := connectToDB()
-
 	if conn == nil {
-		log.Fatal("could not connect to the database")
+		log.Panic("can't connect to database")
 	}
-
 	return conn
 }
 
-func connectToDB() db.Session {
+// connectToDB tries to connect to postgres, and backs off until a connection
+// is made, or we have not connected after 10 tries
+func connectToDB() *sql.DB {
 	counts := 0
 
 	dsn := os.Getenv("DSN")
 
 	for {
-		conn, err := openDB(dsn)
-
+		connection, err := openDB(dsn)
 		if err != nil {
-			log.Println("could not connect to the database", err)
-			counts++
-
-			if counts > 5 {
-				return nil
-			}
-
-			time.Sleep(5 * time.Second)
+			log.Println("postgres not yet ready...")
 		} else {
-			log.Println("connected to the database")
-			return conn
+			log.Print("connected to database!")
+			return connection
 		}
 
+		if counts > 10 {
+			return nil
+		}
+
+		log.Print("Backing off for 1 second")
+		time.Sleep(1 * time.Second)
+		counts++
+
+		continue
 	}
 }
 
-func openDB(dsn string) (db.Session, error) {
-	url, err := postgresql.ParseURL(dsn)
-
+// openDB opens a connection to Postgres, using a DSN read
+// from the environment variable DSN
+func openDB(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := postgresql.Open(url)
-
+	err = db.Ping()
 	if err != nil {
 		return nil, err
 	}
 
-	err = conn.Ping()
-
-	if err != nil {
-		return nil, err
-	}
-
-	return conn, nil
+	return db, nil
 }
 
+// initSession sets up a session, using Redis for session store
 func initSession() *scs.SessionManager {
+	gob.Register(data.User{})
+	// set up session
 	session := scs.New()
 	session.Store = redisstore.New(initRedis())
 	session.Lifetime = 24 * time.Hour
@@ -135,31 +139,33 @@ func initSession() *scs.SessionManager {
 	return session
 }
 
+// initRedis returns a pool of connections to Redis using the
+// environment variable REDIS
 func initRedis() *redis.Pool {
 	redisPool := &redis.Pool{
 		MaxIdle: 10,
 		Dial: func() (redis.Conn, error) {
-			return redis.DialURL(os.Getenv("REDIS"))
+			return redis.Dial("tcp", os.Getenv("REDIS"))
 		},
 	}
 
 	return redisPool
-
 }
 
 func (app *Config) listenForShutdown() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-
-	app.Shitdown()
-
+	app.shutdown()
 	os.Exit(0)
 }
 
-func (app *Config) Shitdown() {
-	app.InfoLog.Println("shutting down the server")
+func (app *Config) shutdown() {
+	// perform any cleanup tasks
+	app.InfoLog.Println("would run cleanup tasks...")
+
+	// block until waitgroup is empty
 	app.Wait.Wait()
 
-	app.InfoLog.Println("graceful shutdown completed")
+	app.InfoLog.Println("closing channels and shutting down application...")
 }

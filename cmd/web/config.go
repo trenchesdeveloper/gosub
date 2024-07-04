@@ -1,17 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"sync"
 
 	"github.com/alexedwards/scs/v2"
 	"github.com/trenchesdeveloper/gosub/data"
-	"github.com/upper/db/v4"
 )
 
 type Config struct {
 	Session  *scs.SessionManager
-	DB       db.Session
+	DB       *sql.DB
 	InfoLog  *log.Logger
 	ErrorLog *log.Logger
 	Wait     *sync.WaitGroup

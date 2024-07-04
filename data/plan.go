@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 	"time"
-
-	"github.com/upper/db/v4"
 )
 
 // Plan is the type for subscription plans
@@ -20,18 +18,37 @@ type Plan struct {
 }
 
 func (p *Plan) GetAll() ([]*Plan, error) {
-	_, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
 
-	planCollection := dbInstance.Collection("plans")
+	query := `select id, plan_name, plan_amount, created_at, updated_at
+	from plans order by id`
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
 	var plans []*Plan
 
-	err := planCollection.Find().OrderBy("plan_amount").All(&plans)
+	for rows.Next() {
+		var plan Plan
+		err := rows.Scan(
+			&plan.ID,
+			&plan.PlanName,
+			&plan.PlanAmount,
+			&plan.CreatedAt,
+			&plan.UpdatedAt,
+		)
 
-	if err != nil {
-		log.Println(err)
-		return nil, err
+		plan.PlanAmountFormatted = plan.AmountForDisplay()
+		if err != nil {
+			log.Println("Error scanning", err)
+			return nil, err
+		}
+
+		plans = append(plans, &plan)
 	}
 
 	return plans, nil
@@ -39,13 +56,21 @@ func (p *Plan) GetAll() ([]*Plan, error) {
 
 // GetOne returns one plan by id
 func (p *Plan) GetOne(id int) (*Plan, error) {
-	_, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
+
+	query := `select id, plan_name, plan_amount, created_at, updated_at from plans where id = $1`
+
 	var plan Plan
+	row := db.QueryRowContext(ctx, query, id)
 
-	plansCollection := dbInstance.Collection("plans")
-
-	err := plansCollection.Find(db.Cond{"id": id}).One(&plan)
+	err := row.Scan(
+		&plan.ID,
+		&plan.PlanName,
+		&plan.PlanAmount,
+		&plan.CreatedAt,
+		&plan.UpdatedAt,
+	)
 
 	if err != nil {
 		return nil, err
@@ -57,28 +82,24 @@ func (p *Plan) GetOne(id int) (*Plan, error) {
 // SubscribeUserToPlan subscribes a user to one plan by insert
 // values into user_plans table
 func (p *Plan) SubscribeUserToPlan(user User, plan Plan) error {
-	_, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
 
-	userPlanCollection := dbInstance.Collection("user_plans")
-
-	err := userPlanCollection.Find(db.Cond{"user_id": user.ID}).Delete()
-
+	// delete existing plan, if any
+	stmt := `delete from user_plans where user_id = $1`
+	_, err := db.ExecContext(ctx, stmt, user.ID)
 	if err != nil {
 		return err
 	}
 
-	_, err = userPlanCollection.Insert(map[string]interface{}{
-		"user_id": user.ID,
-		"plan_id": plan.ID,
-		"created_at": time.Now(),
-		"updated_at": time.Now(),
-	})
+	// subscribe to new plan
+	stmt = `insert into user_plans (user_id, plan_id, created_at, updated_at)
+			values ($1, $2, $3, $4)`
 
+	_, err = db.ExecContext(ctx, stmt, user.ID, plan.ID, time.Now(), time.Now())
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 

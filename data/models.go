@@ -1,19 +1,18 @@
 package data
 
 import (
+	"database/sql"
 	"time"
-
-	"github.com/upper/db/v4"
 )
 
 const dbTimeout = time.Second * 3
 
-var dbInstance db.Session
+var db *sql.DB
 
 // New is the function used to create an instance of the data package. It returns the type
 // Model, which embeds all the types we want to be available to our application.
-func New(dbPool db.Session) Models {
-	dbInstance = dbPool
+func New(dbPool *sql.DB) Models {
+	db = dbPool
 
 	return Models{
 		User: User{},
